@@ -1,4 +1,4 @@
-package tcpserver.app;
+package server.app;
 
 import chat.models.GroupChat;
 import chat.models.GroupMember;
@@ -10,8 +10,13 @@ import chat.network.PacketType;
 import chat.security.CryptoHelper;
 import com.google.gson.Gson;
 import io.github.cdimascio.dotenv.Dotenv;
-import tcpserver.database.Database;
-import tcpserver.utils.PasswordUtils;
+import server.database.chat.GroupChatRepository;
+import server.database.chat.MessageRepository;
+import server.database.queue.OfflineQueueRepository;
+import server.database.user.UserLogRepository;
+import server.database.user.UserRepository;
+import server.utils.EmailUtils;
+import server.utils.PasswordUtils;
 
 import java.io.*;
 import java.net.*;
@@ -37,52 +42,30 @@ public class TcpServer {
     public static final Map<Integer, InetSocketAddress> activeVideo = new ConcurrentHashMap<>();
 
     public static final Gson gson = new Gson();
-    public static volatile KeyPair globalServerKyberKeys;
 
-    public static volatile boolean isUdpServerRunning = true;
     public static volatile boolean isServerRunning = true;
 
     private static final Logger logger = java.util.logging.Logger.getLogger(TcpServer.class.getName());
-    private static final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
     private static final Dotenv dotenv = Dotenv.load();
 
     private static final int TCP_PORT = Integer.parseInt(dotenv.get("TCP_PORT", "25555"));
+    private static final int RATE_LIMIT_MINUTES = 15;
 
     private static final int UDP_AUDIO_PORT = Integer.parseInt(dotenv.get("UDP_AUDIO_PORT", "25556"));
     private static final int UDP_VIDEO_PORT = Integer.parseInt(dotenv.get("UDP_VIDEO_PORT", "25557"));
 
     public static void main(String[] args){
         try {
-            globalServerKyberKeys = CryptoHelper.generateKyberKeys();
             System.out.println("[SERVER] Server starting...");
+            Thread.startVirtualThread(TcpServer::tcpServer);
 
-            startKeyRotation();
-            new Thread(TcpServer::tcpServer).start();
-
-            new Thread(()->udpServer(UDP_AUDIO_PORT, activeCallers)).start();
-            new Thread(()->udpServer(UDP_VIDEO_PORT, activeVideo)).start();
+            Thread.startVirtualThread(()->udpServer(UDP_AUDIO_PORT, activeCallers));
+            Thread.startVirtualThread(()->udpServer(UDP_VIDEO_PORT, activeVideo));
 
         } catch (Exception e) {
             logger.log(Level.SEVERE, "Something went wrong", e);
-            scheduler.shutdown();
         }
-    }
-
-    public static void startKeyRotation() {
-        scheduler.scheduleAtFixedRate(()->{
-            try {
-                System.out.println("[ROTATION] Generating new kyber keys...");
-
-                long start = System.currentTimeMillis();
-                globalServerKyberKeys = CryptoHelper.generateKyberKeys();
-
-                System.out.println("[ROTATION] Keys rotated in " + (System.currentTimeMillis() - start) + "ms. Next rotation in 30 min.");
-
-            } catch (Exception e) {
-                logger.log(Level.SEVERE, "Error during Kyber key rotation", e);
-            }
-        }, 30, 30 , TimeUnit.MINUTES);
     }
 
     public static void tcpServer(){
@@ -96,63 +79,14 @@ public class TcpServer {
                     System.out.println("[CONNECTION] Client connected: " + clientSocket.getInetAddress());
 
                     ClientHandler handler = new ClientHandler(clientSocket);
-                    new Thread(handler).start();
+                    Thread.startVirtualThread(handler);
                 }catch (SocketTimeoutException _){}
             }
         } catch (IOException e) {
             logger.log(Level.SEVERE, "[SERVER] PORT IN USE", e);
         }
     }
-
-    public static void udpServer(int udpPort, Map<Integer, InetSocketAddress> activeQueue) {
-        ExecutorService pool = Executors.newFixedThreadPool(10);
-
-        try (DatagramSocket udpSocket = new DatagramSocket(udpPort)) {
-            udpSocket.setReceiveBufferSize(4 * 1024 * 1024);
-
-            System.out.println("[SERVER] UDP Server active on port " + udpPort);
-            byte[] packetData = new byte[65000];
-
-            while (isUdpServerRunning) {
-                DatagramPacket packet = new DatagramPacket(packetData, packetData.length);
-                udpSocket.receive(packet);
-
-                byte[] dataCopy = new byte[packet.getLength()];
-                System.arraycopy(packet.getData(), 0, dataCopy, 0, packet.getLength());
-                InetAddress senderAddress = packet.getAddress();
-                int senderPort = packet.getPort();
-
-                pool.submit(() -> {
-                    try {
-                        DataInputStream dis = new DataInputStream(
-                                new ByteArrayInputStream(dataCopy)
-                        );
-
-                        int senderId = dis.readInt();
-                        int targetId = dis.readInt();
-
-                        InetSocketAddress senderAddr = new InetSocketAddress(
-                                senderAddress, senderPort
-                        );
-                        activeQueue.put(senderId, senderAddr);
-
-                        InetSocketAddress targetAddr = activeQueue.get(targetId);
-                        if (targetAddr != null) {
-                            DatagramPacket outPacket = new DatagramPacket(dataCopy, dataCopy.length, targetAddr);
-                            synchronized (udpSocket) {
-                                udpSocket.send(outPacket);
-                            }
-                        }
-                    } catch (Exception e) {
-                        logger.log(Level.WARNING, "UDP routing error", e);
-                    }
-                });
-            }
-        } catch (Exception e) {
-            logger.log(Level.SEVERE, "Critical error in UDP server", e);
-        }
-    }
-
+    
     static class ClientHandler implements Runnable{
         private final Socket socket;
         private PrintWriter out;
@@ -219,6 +153,7 @@ public class TcpServer {
                     switch (packet.getType()) {
                         case LOGIN_REQUEST: handleLogin(packet); break;
                         case REGISTER_REQUEST: handleRegister(packet); break;
+                        case CONFIRM_EMAIL_REQUEST: handleConfirmEmail(packet); break;
 
                         case SEND_MESSAGE: handleSendMessage(packet); break;
 
@@ -255,57 +190,82 @@ public class TcpServer {
 
         private void handleLogin(NetworkPacket packet) throws IOException {
             ChatDtos.AuthDto dto = gson.fromJson(packet.getPayload(), ChatDtos.AuthDto.class);
-            User user = Database.selectUserByUsername(dto.username);
+            String ip = this.socket.getInetAddress().getHostAddress();
 
-            if (user != null && PasswordUtils.verifyPassword(dto.password, user.getSalt(), user.getPasswordHash())) {
-                synchronized (clients) {
-                    for (ClientHandler c : clients) {
-                        if (c.currentUser != null && c.currentUser.getId() == user.getId()) {
-                            c.disconnect();
-                            break;
-                        }
-                    }
-                    clients.add(this);
-                }
-                this.currentUser = user;
-                Database.insertUserLog(user.getId(), "LOGIN", System.currentTimeMillis(), socket.getInetAddress().getHostAddress());
-                sendPacket(PacketType.LOGIN_RESPONSE, user);
+            int failedAttempts = UserLogRepository.countRecentFailedLogins(ip, RATE_LIMIT_MINUTES);
+            if (failedAttempts >= 5) {
+                UserLogRepository.insert(0, "LOGIN_RATE_LIMITED", System.currentTimeMillis(), ip);
+                sendPacket(PacketType.LOGIN_RESPONSE, "RATE_LIMITED");
 
-                System.out.println("[AUTH] User " + user.getId() + " connected.");
+                return;
+            }
 
-                new Thread(() -> {
-                    try {
-                        Thread.sleep(200);
-                        List<String> missedPackets = Database.getAndClearPendingPackets(user.getId());
+            User user = UserRepository.selectUserByEmail(dto.email);
 
-                        if (!missedPackets.isEmpty()) {
-                            System.out.println("[OFFLINE] Delivering " + missedPackets.size() + " missed packets to User " + user.getId());
-
-                            for (String json : missedPackets) {
-                                NetworkPacket p = NetworkPacket.fromJson(json);
-                                sendDirectPacket(p);
-
-                                Thread.sleep(20);
-                            }
-                        }
-                    } catch (Exception e) {
-                        logger.log(Level.SEVERE, "Error delivering offline packets", e);
-                    }
-                }).start();
-
-            } else {
+            if (user == null || !PasswordUtils.verifyPassword(dto.password, user.getPasswordHash())) {
+                UserLogRepository.insert(0, "LOGIN_FAILED", System.currentTimeMillis(), ip);
                 sendPacket(PacketType.LOGIN_RESPONSE, "FAIL");
+
+                return;
+            }
+
+            if (!user.isConfirmed()) {
+                sendPacket(PacketType.LOGIN_RESPONSE, "NOT_CONFIRMED");
+                return;
+            }
+
+            synchronized (clients) {
+                for (ClientHandler c : clients) {
+                    if (c.currentUser != null && c.currentUser.getId() == user.getId()) {
+                        c.disconnect();
+                        break;
+                    }
+                }
+                clients.add(this);
+            }
+
+            this.currentUser = user;
+            UserLogRepository.insert(user.getId(), "LOGIN", System.currentTimeMillis(), socket.getInetAddress().getHostAddress());
+            sendPacket(PacketType.LOGIN_RESPONSE, user);
+
+            System.out.println("[AUTH] User " + user.getId() + " connected.");
+
+            Thread.startVirtualThread(() -> {
+                try {
+                    Thread.sleep(200);
+                    List<String> missedPackets = OfflineQueueRepository.getAndClearPendingPackets(user.getId());
+
+                    if (!missedPackets.isEmpty()) {
+                        System.out.println("[OFFLINE] Delivering " + missedPackets.size() + " missed packets to User " + user.getId());
+                        for (String json : missedPackets) {
+                            sendDirectPacket(NetworkPacket.fromJson(json));
+                            Thread.sleep(20);
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.log(Level.SEVERE, "Error delivering offline packets", e);
+                }
+            });
+        }
+
+        private void handleConfirmEmail(NetworkPacket packet) throws IOException {
+            String code = gson.fromJson(packet.getPayload(), String.class);
+            if (UserRepository.confirmUser(code)) {
+                sendPacket(PacketType.CONFIRM_EMAIL_RESPONSE, "OK");
+            } else {
+                sendPacket(PacketType.CONFIRM_EMAIL_RESPONSE, "INVALID");
             }
         }
 
         private void handleSendMessage(NetworkPacket packet) throws IOException {
             Message receivedMsg = gson.fromJson(packet.getPayload(), Message.class);
+
             if (currentChatId == -1) return;
+            if (!GroupChatRepository.isMember(currentChatId, currentUser.getId())) return;
 
             long timestamp = System.currentTimeMillis();
-            System.out.println("[CHAT] Message received from User " + currentUser.getId());
 
-            int msgId = Database.insertMessageReturningId(
+            int msgId = MessageRepository.insertMessageReturningId(
                     receivedMsg.getContent(),
                     timestamp,
                     currentUser.getId(),
@@ -314,19 +274,12 @@ public class TcpServer {
 
             Message fullMsg = new Message(msgId, receivedMsg.getContent(), timestamp, currentUser.getId(), currentChatId);
 
-            String clearTextPreview = new String(receivedMsg.getContent());
-            System.out.println("[DEBUG] Cleartext preview: " + clearTextPreview);
-
-            String encryptedPreview = Base64.getEncoder().encodeToString(fullMsg.getContent());
-            System.out.println("[DEBUG] Server-side encrypted preview: " + encryptedPreview);
-
             broadcastToPartner(currentChatId, PacketType.RECEIVE_MESSAGE, fullMsg);
-
             sendPacket(PacketType.RECEIVE_MESSAGE, fullMsg);
         }
 
         private void broadcastToPartner(int chatId, PacketType type, Object payload) {
-            List<GroupMember> members = Database.selectGroupMembersByChatId(chatId);
+            List<GroupMember> members = GroupChatRepository.selectGroupMembersByChatId(chatId);
 
             for (GroupMember m : members) {
                 int targetId = m.getUserId();
@@ -351,7 +304,7 @@ public class TcpServer {
             try {
                 System.out.println("[HANDSHAKE] Handshake started...");
 
-                KeyPair kyberPair = TcpServer.globalServerKyberKeys;
+                KeyPair kyberPair = CryptoHelper.generateKyberKeys();
                 KeyPair ecPair = CryptoHelper.generateECKeys();
 
                 PrivateKey tempKyberPrivate = kyberPair.getPrivate();
@@ -427,41 +380,54 @@ public class TcpServer {
         
         private void handleRegister(NetworkPacket packet) throws IOException {
             ChatDtos.AuthDto dto = gson.fromJson(packet.getPayload(), ChatDtos.AuthDto.class);
+
             synchronized (registerLock) {
-                if (Database.selectUserByUsername(dto.username) != null) {
+                if (UserRepository.selectUserByEmail(dto.email) != null) {
                     sendPacket(PacketType.REGISTER_RESPONSE, "EXISTS");
                     return;
                 }
-                String salt = PasswordUtils.generateSalt(50);
-                String hash = PasswordUtils.hashPassword(dto.password, salt);
-                Database.insertUser(dto.username, hash, salt, System.currentTimeMillis());
-                User newUser = Database.selectUserByUsername(dto.username);
-                this.currentUser = newUser;
-                synchronized (clients) {
-                    clients.add(this);
+
+                String hash = PasswordUtils.hashPassword(dto.password);
+                String token = UserRepository.insertUser(dto.username, dto.email, hash, System.currentTimeMillis());
+
+                if (token == null) {
+                    sendPacket(PacketType.REGISTER_RESPONSE, "FAIL");
+                    return;
                 }
-                sendPacket(PacketType.REGISTER_RESPONSE, newUser);
+
+                EmailUtils.sendConfirmation(dto.email, token);
+                sendPacket(PacketType.REGISTER_RESPONSE, "CHECK_EMAIL");
+
             }
         }
 
         private void handleGetChats() throws IOException {
             if (currentUser != null) {
-                sendPacket(PacketType.GET_CHATS_RESPONSE, Database.selectGroupChatsByUserId(currentUser.getId()));
+                sendPacket(PacketType.GET_CHATS_RESPONSE, GroupChatRepository.selectGroupChatsByUserId(currentUser.getId()));
             }
         }
 
         private void handleGetUsersForAdd() throws IOException {
-            List<String> rawUsers = Database.selectUsersAddConversation();
+            List<String> rawUsers = UserRepository.selectUsersAddConversation();
             List<String> filtered = new ArrayList<>();
-            for (String u : rawUsers) { int uid = Integer.parseInt(u.split(",")[0]); if (uid != currentUser.getId() && uid != -1) filtered.add(u); }
+            for (String u : rawUsers) {
+                int uid = Integer.parseInt(u.split(",")[0]);
+                if (uid != currentUser.getId() && uid != -1) filtered.add(u);
+            }
             sendPacket(PacketType.GET_USERS_RESPONSE, filtered);
         }
 
         private void handleEnterChat(NetworkPacket packet) throws IOException {
             int chatId = gson.fromJson(packet.getPayload(), Integer.class);
+
+            if (!GroupChatRepository.isMember(chatId, currentUser.getId())) {
+                sendPacket(PacketType.ENTER_CHAT_RESPONSE, "DENIED");
+                return;
+            }
+
             this.currentChatId = chatId;
             sendPacket(PacketType.ENTER_CHAT_RESPONSE, "OK");
-            List<Message> history = Database.selectMessagesByGroup(chatId);
+            List<Message> history = MessageRepository.selectMessagesByGroup(chatId);
             sendPacket(PacketType.GET_MESSAGES_RESPONSE, history);
         }
 
@@ -469,18 +435,18 @@ public class TcpServer {
             ChatDtos.CreateGroupDto dto = gson.fromJson(packet.getPayload(), ChatDtos.CreateGroupDto.class);
 
             synchronized (chatCreationLock) {
-                GroupChat existing = Database.selectChatBetweenUsers(currentUser.getId(), dto.targetUserId);
+                GroupChat existing = GroupChatRepository.selectChatBetweenUsers(currentUser.getId(), dto.targetUserId);
                 if (existing != null) {
                     System.out.println("[GROUP] Chat already exists between " + currentUser.getId() + " and " + dto.targetUserId);
                     sendPacket(PacketType.CREATE_CHAT_BROADCAST, new ChatDtos.NewChatBroadcastDto(existing, null));
                     return;
                 }
 
-                GroupChat newChat = Database.insertGroupChatReturningId(dto.groupName);
+                GroupChat newChat = GroupChatRepository.insertGroupChatReturningId(dto.groupName);
 
                 if (newChat != null) {
-                    Database.insertGroupMember(newChat.getId(), currentUser.getId());
-                    Database.insertGroupMember(newChat.getId(), dto.targetUserId);
+                    GroupChatRepository.insertGroupMember(newChat.getId(), currentUser.getId());
+                    GroupChatRepository.insertGroupMember(newChat.getId(), dto.targetUserId);
 
                     ChatDtos.NewChatBroadcastDto packetForAlice = new ChatDtos.NewChatBroadcastDto(newChat, null);
                     NetworkPacket pAlice = new NetworkPacket(PacketType.CREATE_CHAT_BROADCAST, currentUser.getId(), packetForAlice);
@@ -499,7 +465,9 @@ public class TcpServer {
         private void handleRenameChat(NetworkPacket packet) throws IOException {
             ChatDtos.RenameGroupDto dto = gson.fromJson(packet.getPayload(), ChatDtos.RenameGroupDto.class);
 
-            if(Database.updateGroupChatName(dto.chatId, dto.newName)) {
+            if (!GroupChatRepository.isMember(dto.chatId, currentUser.getId())) return;
+
+            if(GroupChatRepository.updateGroupChatName(dto.chatId, dto.newName)) {
                 NetworkPacket broadcastPacket = new NetworkPacket(PacketType.RENAME_CHAT_BROADCAST, currentUser.getId(), dto);
 
                 sendDirectPacket(broadcastPacket);
@@ -513,9 +481,10 @@ public class TcpServer {
         private void handleDeleteChat(NetworkPacket packet) throws IOException {
             int chatId = gson.fromJson(packet.getPayload(), Integer.class);
 
-            List<GroupMember> members = Database.selectGroupMembersByChatId(chatId);
+            if (!GroupChatRepository.isMember(chatId, currentUser.getId())) return;
+            List<GroupMember> members = GroupChatRepository.selectGroupMembersByChatId(chatId);
 
-            if(Database.deleteGroupChatTransactional(chatId)) {
+            if(GroupChatRepository.deleteGroupChatTransactional(chatId)) {
                 NetworkPacket broadcastPacket = new NetworkPacket(PacketType.DELETE_CHAT_BROADCAST, currentUser.getId(), chatId);
                 sendDirectPacket(broadcastPacket);
 
@@ -562,12 +531,12 @@ public class TcpServer {
                 System.out.println("[SERVER] User " + targetUserId + " is offline. Saving packet to queue...");
                 String packetJson = p.toJson();
 
-                Database.insertPendingPacket(targetUserId, packetJson);
+                OfflineQueueRepository.insertPendingPacket(targetUserId, packetJson);
             }
         }
 
         private void broadcastToChatMembers(int chatId, PacketType type, Object payload) {
-            List<GroupMember> members = Database.selectGroupMembersByChatId(chatId);
+            List<GroupMember> members = GroupChatRepository.selectGroupMembersByChatId(chatId);
             NetworkPacket p = new NetworkPacket(type, currentUser.getId(), payload);
             for (GroupMember m : members) {
                 if (m.getUserId() != currentUser.getId()) {
@@ -578,7 +547,10 @@ public class TcpServer {
 
         private void handleEditMessage(NetworkPacket packet) throws IOException {
             ChatDtos.EditMessageDto dto = gson.fromJson(packet.getPayload(), ChatDtos.EditMessageDto.class);
-            if (Database.updateMessageById(dto.messageId, dto.newContent)) {
+
+            if (!MessageRepository.isOwner(dto.messageId, currentUser.getId())) return;
+
+            if (MessageRepository.updateMessageById(dto.messageId, dto.newContent)) {
                 if (currentChatId != -1) {
                     broadcastToPartner(currentChatId, PacketType.EDIT_MESSAGE_BROADCAST, dto);
                     sendPacket(PacketType.EDIT_MESSAGE_BROADCAST, dto);
@@ -587,7 +559,10 @@ public class TcpServer {
         }
         private void handleDeleteMessage(NetworkPacket packet) throws IOException {
             int msgId = gson.fromJson(packet.getPayload(), Integer.class);
-            if (Database.deleteMessageById(msgId)) {
+
+            if (!MessageRepository.isOwner(msgId, currentUser.getId())) return;
+
+            if (MessageRepository.deleteMessageById(msgId)) {
                 if (currentChatId != -1) {
                     broadcastToPartner(currentChatId, PacketType.DELETE_MESSAGE_BROADCAST, msgId);
                     sendPacket(PacketType.DELETE_MESSAGE_BROADCAST, msgId);
@@ -601,7 +576,7 @@ public class TcpServer {
 
                 System.out.println("[PGP] User " + currentUser.getId() + " is publishing new keys...");
 
-                boolean success = Database.updateUserKeys(
+                boolean success = UserRepository.updateUserKeys(
                         currentUser.getId(),
                         dto.identityKeyPublic,
                         dto.signedPreKeyPublic,
@@ -624,7 +599,7 @@ public class TcpServer {
 
                 System.out.println("[PGP] User " + currentUser.getId() + " requested bundle for User " + req.targetUserId);
 
-                ChatDtos.GetBundleResponseDto bundle = Database.selectUserKeys(req.targetUserId);
+                ChatDtos.GetBundleResponseDto bundle = UserRepository.selectUserKeys(req.targetUserId);
 
                 if (bundle != null) {
                     sendPacket(PacketType.GET_BUNDLE_RESPONSE, bundle);
@@ -677,7 +652,9 @@ public class TcpServer {
 
         private void handleGetChatMembers(NetworkPacket packet) throws IOException {
             int requestedChatId = gson.fromJson(packet.getPayload(), Integer.class);
-            List<GroupMember> members = Database.selectGroupMembersByChatId(requestedChatId);
+
+            if (!GroupChatRepository.isMember(requestedChatId, currentUser.getId())) return;
+            List<GroupMember> members = GroupChatRepository.selectGroupMembersByChatId(requestedChatId);
 
             List<Integer> memberIds = new ArrayList<>();
             for (GroupMember m : members) {
