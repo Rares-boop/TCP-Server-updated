@@ -1,0 +1,146 @@
+package app.database;
+
+import java.sql.SQLException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class DatabaseInitializer {
+    private static final Logger logger = Logger.getLogger(DatabaseInitializer.class.getName());
+
+    public static void main(String[] args) {
+        initAllTables();
+        System.out.println("[DATABASE] All tables created.");
+    }
+
+    public static void initAllTables() {
+        createTableUsers();
+        createTableGroupChats();
+        createTableGroupMembers();
+        createTableUserLogs();
+        createTableMessages();
+        createTableOfflineQueue();
+    }
+
+    private static void createTableUsers() {
+        try (var conn = DatabaseConnection.getConnection();
+             var stmt = conn.createStatement()) {
+
+            stmt.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS USERS(
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(100) NOT NULL,
+                    email VARCHAR(100) UNIQUE NOT NULL,
+                    password_hash VARCHAR(255) NOT NULL,
+                    created_at BIGINT,
+                    confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+                    confirmation_token TEXT,
+                    identity_key TEXT,
+                    signed_pre_key TEXT,
+                    signature TEXT
+                );
+            """);
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Failed to create USERS table", e);
+        }
+    }
+
+    private static void createTableUserLogs() {
+        try (var conn = DatabaseConnection.getConnection();
+             var stmt = conn.createStatement()) {
+
+            stmt.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS USER_LOGS(
+                    id SERIAL PRIMARY KEY,
+                    id_user INTEGER,
+                    action_type VARCHAR(100),
+                    log_timestamp BIGINT,
+                    ip_address VARCHAR(50),
+                    FOREIGN KEY(id_user) REFERENCES USERS(id)
+                );
+            """);
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Failed to create USER_LOGS table", e);
+        }
+    }
+
+    private static void createTableGroupChats() {
+        try (var conn = DatabaseConnection.getConnection();
+             var stmt = conn.createStatement()) {
+
+            stmt.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS GROUP_CHATS(
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(200) NOT NULL
+                );
+            """);
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Failed to create GROUP_CHATS table", e);
+        }
+    }
+
+    private static void createTableGroupMembers() {
+        try (var conn = DatabaseConnection.getConnection();
+             var stmt = conn.createStatement()) {
+
+            stmt.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS GROUP_MEMBERS(
+                    id_group INTEGER,
+                    id_user INTEGER,
+                    PRIMARY KEY(id_group, id_user),
+                    FOREIGN KEY(id_group) REFERENCES GROUP_CHATS(id) ON DELETE CASCADE,
+                    FOREIGN KEY(id_user) REFERENCES USERS(id) ON DELETE CASCADE
+                );
+            """);
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Failed to create GROUP_MEMBERS table", e);
+        }
+    }
+
+    private static void createTableMessages() {
+        try (var conn = DatabaseConnection.getConnection();
+             var stmt = conn.createStatement()) {
+
+            stmt.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS MESSAGES(
+                    id SERIAL PRIMARY KEY,
+                    content BYTEA NOT NULL,
+                    log_timestamp BIGINT NOT NULL,
+                    id_sender INTEGER NOT NULL,
+                    id_group INTEGER NOT NULL,
+                    FOREIGN KEY(id_sender) REFERENCES USERS(id) ON DELETE CASCADE,
+                    FOREIGN KEY(id_group) REFERENCES GROUP_CHATS(id) ON DELETE CASCADE
+                );
+            """);
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Failed to create MESSAGES table", e);
+        }
+    }
+
+    private static void createTableOfflineQueue() {
+        try (var conn = DatabaseConnection.getConnection();
+             var stmt = conn.createStatement()) {
+
+            stmt.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS OFFLINE_QUEUE(
+                    id SERIAL PRIMARY KEY,
+                    id_user INTEGER NOT NULL,
+                    packet_content TEXT NOT NULL,
+                    created_at BIGINT,
+                    FOREIGN KEY(id_user) REFERENCES USERS(id) ON DELETE CASCADE
+                );
+            """);
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Failed to create OFFLINE_QUEUE table", e);
+        }
+    }
+
+    private DatabaseInitializer() {
+        throw new UnsupportedOperationException("Utility class");
+    }
+}

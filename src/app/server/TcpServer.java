@@ -1,4 +1,4 @@
-package server.app;
+package app.server;
 
 import chat.models.GroupChat;
 import chat.models.GroupMember;
@@ -10,13 +10,13 @@ import chat.network.PacketType;
 import chat.security.CryptoHelper;
 import com.google.gson.Gson;
 import io.github.cdimascio.dotenv.Dotenv;
-import server.database.chat.GroupChatRepository;
-import server.database.chat.MessageRepository;
-import server.database.queue.OfflineQueueRepository;
-import server.database.user.UserLogRepository;
-import server.database.user.UserRepository;
-import server.utils.EmailUtils;
-import server.utils.PasswordUtils;
+import app.database.chat.GroupChatRepository;
+import app.database.chat.MessageRepository;
+import app.database.queue.OfflineQueueRepository;
+import app.database.user.UserLogRepository;
+import app.database.user.UserRepository;
+import app.utils.EmailUtils;
+import app.utils.PasswordUtils;
 
 import java.io.*;
 import java.net.*;
@@ -26,8 +26,6 @@ import java.security.PublicKey;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.crypto.SecretKey;
@@ -38,37 +36,16 @@ public class TcpServer {
     private static final Object chatCreationLock = new Object();
     private static final Object registerLock = new Object();
 
-    public static final Map<Integer, InetSocketAddress> activeCallers = new ConcurrentHashMap<>();
-    public static final Map<Integer, InetSocketAddress> activeVideo = new ConcurrentHashMap<>();
-
     public static final Gson gson = new Gson();
-
     public static volatile boolean isServerRunning = true;
 
     private static final Logger logger = java.util.logging.Logger.getLogger(TcpServer.class.getName());
-
     private static final Dotenv dotenv = Dotenv.load();
 
     private static final int TCP_PORT = Integer.parseInt(dotenv.get("TCP_PORT", "25555"));
     private static final int RATE_LIMIT_MINUTES = 15;
 
-    private static final int UDP_AUDIO_PORT = Integer.parseInt(dotenv.get("UDP_AUDIO_PORT", "25556"));
-    private static final int UDP_VIDEO_PORT = Integer.parseInt(dotenv.get("UDP_VIDEO_PORT", "25557"));
-
-    public static void main(String[] args){
-        try {
-            System.out.println("[SERVER] Server starting...");
-            Thread.startVirtualThread(TcpServer::tcpServer);
-
-            Thread.startVirtualThread(()->udpServer(UDP_AUDIO_PORT, activeCallers));
-            Thread.startVirtualThread(()->udpServer(UDP_VIDEO_PORT, activeVideo));
-
-        } catch (Exception e) {
-            logger.log(Level.SEVERE, "Something went wrong", e);
-        }
-    }
-
-    public static void tcpServer(){
+    public static void start(){
         try(ServerSocket serverSocket = new ServerSocket(TCP_PORT)){
             serverSocket.setSoTimeout(1000);
             System.out.println("[SERVER] TCP Server listening on port " + TCP_PORT + "...");
@@ -86,7 +63,7 @@ public class TcpServer {
             logger.log(Level.SEVERE, "[SERVER] PORT IN USE", e);
         }
     }
-    
+
     static class ClientHandler implements Runnable{
         private final Socket socket;
         private PrintWriter out;
@@ -643,11 +620,11 @@ public class TcpServer {
             NetworkPacket endPacket = new NetworkPacket(PacketType.CALL_END, currentUser.getId(), "END");
             sendToSpecificUser(partnerId, endPacket);
 
-            TcpServer.activeCallers.remove(currentUser.getId());
-            TcpServer.activeCallers.remove(partnerId);
+            UdpServer.activeCallers.remove(currentUser.getId());
+            UdpServer.activeCallers.remove(partnerId);
 
-            TcpServer.activeVideo.remove(currentUser.getId());
-            TcpServer.activeVideo.remove(partnerId);
+            UdpServer.activeVideo.remove(currentUser.getId());
+            UdpServer.activeVideo.remove(partnerId);
         }
 
         private void handleGetChatMembers(NetworkPacket packet) throws IOException {

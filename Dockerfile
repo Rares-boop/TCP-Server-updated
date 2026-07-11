@@ -3,7 +3,6 @@ FROM eclipse-temurin:24-jdk
 WORKDIR /app
 
 COPY TCPServer.jar app.jar
-COPY .env .env
 
 RUN mkdir extracted && \
     cd extracted && \
@@ -13,7 +12,7 @@ RUN mkdir extracted && \
     cd .. && rm -rf extracted
 
 EXPOSE 15555
-EXPOSE 15556
-EXPOSE 15557
+EXPOSE 15556/udp
+EXPOSE 15557/udp
 
 CMD ["java", "-jar", "app.jar"]

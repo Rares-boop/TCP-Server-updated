@@ -1,4 +1,4 @@
-package server.utils;
+package app.utils;
 
 import at.favre.lib.crypto.bcrypt.BCrypt;
 import io.github.cdimascio.dotenv.Dotenv;
