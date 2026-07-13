@@ -171,7 +171,7 @@ public class TcpServer {
 
             int failedAttempts = UserLogRepository.countRecentFailedLogins(ip, RATE_LIMIT_MINUTES);
             if (failedAttempts >= 5) {
-                UserLogRepository.insert(0, "LOGIN_RATE_LIMITED", System.currentTimeMillis(), ip);
+                UserLogRepository.insert(null, "LOGIN_RATE_LIMITED", System.currentTimeMillis(), ip);
                 sendPacket(PacketType.LOGIN_RESPONSE, "RATE_LIMITED");
 
                 return;
@@ -180,7 +180,7 @@ public class TcpServer {
             User user = UserRepository.selectUserByEmail(dto.email);
 
             if (user == null || !PasswordUtils.verifyPassword(dto.password, user.getPasswordHash())) {
-                UserLogRepository.insert(0, "LOGIN_FAILED", System.currentTimeMillis(), ip);
+                UserLogRepository.insert(null, "LOGIN_FAILED", System.currentTimeMillis(), ip);
                 sendPacket(PacketType.LOGIN_RESPONSE, "FAIL");
 
                 return;

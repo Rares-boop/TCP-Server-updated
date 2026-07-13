@@ -19,6 +19,7 @@ public class DatabaseInitializer {
         createTableUserLogs();
         createTableMessages();
         createTableOfflineQueue();
+        createIndexes();
     }
 
     private static void createTableUsers() {
@@ -137,6 +138,27 @@ public class DatabaseInitializer {
 
         } catch (SQLException e) {
             logger.log(Level.SEVERE, "[DATABASE] Failed to create OFFLINE_QUEUE table", e);
+        }
+    }
+
+    private static void createIndexes() {
+        String[] indexes = {
+                "CREATE INDEX IF NOT EXISTS idx_users_email ON USERS(email)",
+                "CREATE INDEX IF NOT EXISTS idx_messages_group ON MESSAGES(id_group)",
+                "CREATE INDEX IF NOT EXISTS idx_messages_sender ON MESSAGES(id_sender)",
+                "CREATE INDEX IF NOT EXISTS idx_group_members_user ON GROUP_MEMBERS(id_user)",
+                "CREATE INDEX IF NOT EXISTS idx_group_members_group ON GROUP_MEMBERS(id_group)",
+                "CREATE INDEX IF NOT EXISTS idx_offline_queue_user ON OFFLINE_QUEUE(id_user)",
+                "CREATE INDEX IF NOT EXISTS idx_user_logs_ip ON USER_LOGS(ip_address, action_type)",
+        };
+
+        try (var conn = DatabaseConnection.getConnection();
+             var stmt = conn.createStatement()) {
+            for (String idx : indexes) {
+                stmt.executeUpdate(idx);
+            }
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Error creating indexes", e);
         }
     }
 

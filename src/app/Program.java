@@ -1,9 +1,12 @@
 package app;
 
+import app.database.user.UserLogRepository;
 import app.server.TcpServer;
 import app.server.UdpServer;
 import io.github.cdimascio.dotenv.Dotenv;
 
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -21,6 +24,11 @@ public class Program {
 
             Thread.startVirtualThread(() -> UdpServer.start(UDP_AUDIO_PORT, UdpServer.activeCallers));
             Thread.startVirtualThread(() -> UdpServer.start(UDP_VIDEO_PORT, UdpServer.activeVideo));
+
+            Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(
+                    () -> UserLogRepository.deleteOlderThan(30),
+                    1, 24, TimeUnit.HOURS
+            );
 
             Thread.currentThread().join();
 
