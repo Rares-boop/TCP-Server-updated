@@ -35,3 +35,8 @@ bin/
 *.jar
 META-INF/
 
+### Keys ###
+*.enc
+*.key
+server_dilithium.enc
+

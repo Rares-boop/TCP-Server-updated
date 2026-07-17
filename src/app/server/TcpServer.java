@@ -7,7 +7,6 @@ import chat.models.User;
 import chat.network.ChatDtos;
 import chat.network.NetworkPacket;
 import chat.network.PacketType;
-import chat.security.CryptoHelper;
 import com.google.gson.Gson;
 import io.github.cdimascio.dotenv.Dotenv;
 import app.database.chat.GroupChatRepository;
@@ -17,18 +16,15 @@ import app.database.user.UserLogRepository;
 import app.database.user.UserRepository;
 import app.utils.EmailUtils;
 import app.utils.PasswordUtils;
+import tcpsecure.protocol.SecureServerSocket;
 
 import java.io.*;
 import java.net.*;
-import java.security.KeyPair;
 import java.security.PrivateKey;
-import java.security.PublicKey;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.crypto.SecretKey;
 
 public class TcpServer {
     private static final List<ClientHandler> clients = new ArrayList<>();
@@ -45,8 +41,8 @@ public class TcpServer {
     private static final int TCP_PORT = Integer.parseInt(dotenv.get("TCP_PORT", "25555"));
     private static final int RATE_LIMIT_MINUTES = 15;
 
-    public static void start(){
-        try(ServerSocket serverSocket = new ServerSocket(TCP_PORT)){
+    public static void start(PrivateKey serverKey){
+        try(SecureServerSocket serverSocket = new SecureServerSocket(TCP_PORT, serverKey)){
             serverSocket.setSoTimeout(1000);
             System.out.println("[SERVER] TCP Server listening on port " + TCP_PORT + "...");
 
@@ -73,8 +69,6 @@ public class TcpServer {
         private int currentChatId = -1;
         private boolean isRunning = true;
 
-        private SecretKey sessionKey = null;
-
         public ClientHandler(Socket socket) {
             this.socket = socket;
             try{
@@ -91,12 +85,6 @@ public class TcpServer {
         @Override
         public void run() {
             try {
-                if (!performHandshake()) {
-                    System.out.println("[AUTH] Handshake failed.");
-                    disconnect();
-                    return;
-                }
-
                 while (isRunning) {
                     String jsonRequest = in.readLine();
                     if(jsonRequest==null){
@@ -104,28 +92,6 @@ public class TcpServer {
                     }
 
                     NetworkPacket packet = NetworkPacket.fromJson(jsonRequest);
-
-                    if (packet.getType() == PacketType.SECURE_ENVELOPE) {
-                        try {
-                            String encryptedPayload = packet.getPayload().getAsString();
-                            byte[] packedBytes = Base64.getDecoder().decode(encryptedPayload);
-
-                            System.out.println("[ENCRYPTED] DATA: " + encryptedPayload);
-
-                            String originalJson = CryptoHelper.unpackAndDecrypt(sessionKey, packedBytes);
-                            packet = NetworkPacket.fromJson(originalJson);
-
-                            System.out.println("[DECRYPTED] Original packet: " + originalJson);
-
-                        } catch (Exception e) {
-                            System.out.println("[DECRYPTED] Tunnel decryption error!");
-                            continue;
-                        }
-                    }
-                    else {
-                        System.out.println("[SERVER] Unencrypted packet rejected: " + packet.getType());
-                        continue;
-                    }
 
                     switch (packet.getType()) {
                         case LOGIN_REQUEST: handleLogin(packet); break;
@@ -159,7 +125,10 @@ public class TcpServer {
                         default: System.out.println("Unknown packet: " + packet.getType());
                     }
                 }
-            } catch (Exception e) {
+            } catch (EOFException e) {
+                // Client disconnected — normal
+            }
+            catch (Exception e) {
                 logger.log(Level.SEVERE, "Client thread crashed", e);
                 disconnect();
             }
@@ -277,50 +246,6 @@ public class TcpServer {
             }
         }
 
-        private boolean performHandshake() {
-            try {
-                System.out.println("[HANDSHAKE] Handshake started...");
-
-                KeyPair kyberPair = CryptoHelper.generateKyberKeys();
-                KeyPair ecPair = CryptoHelper.generateECKeys();
-
-                PrivateKey tempKyberPrivate = kyberPair.getPrivate();
-                byte[] pubBytes = kyberPair.getPublic().getEncoded();
-
-                String pubBase64 = Base64.getEncoder().encodeToString(pubBytes);
-                String ecPubBase64 = Base64.getEncoder().encodeToString(ecPair.getPublic().getEncoded());
-
-                String combinedPayload = pubBase64 + ":" + ecPubBase64;
-
-                NetworkPacket hello = new NetworkPacket(PacketType.KYBER_SERVER_HELLO, 0, combinedPayload);
-                synchronized (this){
-                    out.println(hello.toJson());
-                    out.flush();
-                }
-
-                String responseJson = in.readLine();
-                NetworkPacket response = NetworkPacket.fromJson(responseJson);
-
-                if (response.getType() == PacketType.KYBER_CLIENT_FINISH) {
-                    String payload = response.getPayload().getAsString();
-                    String[] parts = payload.split(":");
-
-                    byte[] kyberCipherBytes = Base64.getDecoder().decode(parts[0]);
-                    byte[] clientECPubBytes = Base64.getDecoder().decode(parts[1]);
-
-                    SecretKey kyberSecret = CryptoHelper.decapsulate(tempKyberPrivate, kyberCipherBytes);
-
-                    PublicKey clientECPub = CryptoHelper.decodeECPublicKey(clientECPubBytes);
-                    byte[] ecSecret = CryptoHelper.doECDH(ecPair.getPrivate(), clientECPub);
-
-                    this.sessionKey = CryptoHelper.combineSecrets(ecSecret, kyberSecret.getEncoded());
-                    System.out.println("[HANDSHAKE] Tunel OK!");
-                    return true;
-                }
-                return false;
-            } catch (Exception e) { return false; }
-        }
-
         private void sendPacket(PacketType type, Object payload) throws IOException {
             int myId = (currentUser != null) ? currentUser.getId() : 0;
             NetworkPacket p = new NetworkPacket(type, myId, payload);
@@ -328,29 +253,11 @@ public class TcpServer {
         }
 
         private void sendDirectPacket(NetworkPacket p) throws IOException {
-            if (sessionKey != null) {
-                try {
-                    String clearJson = p.toJson();
-                    byte[] encryptedBytes = CryptoHelper.encryptAndPack(sessionKey, clearJson);
-                    String encryptedBase64 = Base64.getEncoder().encodeToString(encryptedBytes);
-                    NetworkPacket envelope = new NetworkPacket(PacketType.SECURE_ENVELOPE, p.getSenderId(), encryptedBase64);
-                    synchronized (this) {
-                        out.println(envelope.toJson());
-                        out.flush();
-                        if(out.checkError()){
-                            throw new IOException("Socket not responding for writing ");
-                        }
-                    }
-                } catch (Exception e) {
-                    throw new IOException("Socket not responding for writing ");
-                }
-            } else {
-                synchronized (this) {
-                    out.println(p.toJson());
-                    out.flush();
-                    if(out.checkError()){
-                        throw new IOException("Socket not responding for writing ");
-                    }
+            synchronized (this) {
+                out.println(p.toJson());
+                out.flush();
+                if (out.checkError()) {
+                    throw new IOException("Socket not responding for writing");
                 }
             }
         }

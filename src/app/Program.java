@@ -3,8 +3,13 @@ package app;
 import app.database.user.UserLogRepository;
 import app.server.TcpServer;
 import app.server.UdpServer;
+import app.utils.SecureKeyStorage;
+import crypto.api.CryptoHelper;
 import io.github.cdimascio.dotenv.Dotenv;
 
+import java.nio.file.Path;
+import java.security.PrivateKey;
+import java.util.Base64;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
@@ -19,8 +24,14 @@ public class Program {
 
     public static void main(String[] args) {
         try {
+            Path keyPath = Path.of(dotenv.get("DILITHIUM_KEY_PATH", "server_dilithium.enc"));
+            String keyPass = dotenv.get("DILITHIUM_KEY_PASSWORD");
+            byte[] keyBytes = SecureKeyStorage.loadDecrypted(keyPath, keyPass);
+            String keyBase64 = Base64.getEncoder().encodeToString(keyBytes);
+            PrivateKey serverKey = CryptoHelper.stringToDilithiumPrivate(keyBase64);
+
             System.out.println("[SERVER] Server starting...");
-            Thread.startVirtualThread(TcpServer::start);
+            Thread.startVirtualThread(()->TcpServer.start(serverKey));
 
             Thread.startVirtualThread(() -> UdpServer.start(UDP_AUDIO_PORT, UdpServer.activeCallers));
             Thread.startVirtualThread(() -> UdpServer.start(UDP_VIDEO_PORT, UdpServer.activeVideo));
