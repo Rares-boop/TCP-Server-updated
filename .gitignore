@@ -39,4 +39,5 @@ META-INF/
 *.enc
 *.key
 server_dilithium.enc
+firebase-service-account.json
 

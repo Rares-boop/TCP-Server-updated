@@ -132,6 +132,55 @@ public class UserRepository {
         }
     }
 
+    public static boolean updateFcmToken(int userId, String fcmToken){
+        String query = "UPDATE USERS SET fcm_token = ? WHERE id = ?";
+        try(var connection = DatabaseConnection.getConnection();
+        PreparedStatement ps = connection.prepareStatement(query)){
+
+            ps.setString(1, fcmToken);
+            ps.setInt(2, userId);
+
+            return ps.executeUpdate() > 0;
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Error updating FCM token for user " + userId, e);
+            return false;
+        }
+    }
+
+    public static String getFcmToken(int userId){
+        String query = "SELECT fcm_token FROM USERS WHERE id = ?";
+        try(var connection = DatabaseConnection.getConnection();
+        PreparedStatement ps = connection.prepareStatement(query)){
+
+            ps.setInt(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString("fcm_token");
+                }
+            }
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Error fetching FCM token for user " + userId, e);
+        }
+
+        return null;
+    }
+
+    public static boolean clearFcmToken(int userId){
+        String query = "UPDATE USERS SET fcm_token = NULL WHERE id = ?";
+        try(var connection = DatabaseConnection.getConnection();
+        PreparedStatement ps = connection.prepareStatement(query)){
+
+            ps.setInt(1, userId);
+            return ps.executeUpdate() > 0;
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Error clearing FCM token for user " + userId, e);
+            return false;
+        }
+    }
+
     private static User mapUser(ResultSet rs) throws SQLException {
         return new User(
                 rs.getInt("id"),

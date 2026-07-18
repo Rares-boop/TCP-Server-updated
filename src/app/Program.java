@@ -3,6 +3,7 @@ package app;
 import app.database.user.UserLogRepository;
 import app.server.TcpServer;
 import app.server.UdpServer;
+import app.utils.FcmService;
 import app.utils.SecureKeyStorage;
 import crypto.api.CryptoHelper;
 import io.github.cdimascio.dotenv.Dotenv;
@@ -29,6 +30,8 @@ public class Program {
             byte[] keyBytes = SecureKeyStorage.loadDecrypted(keyPath, keyPass);
             String keyBase64 = Base64.getEncoder().encodeToString(keyBytes);
             PrivateKey serverKey = CryptoHelper.stringToDilithiumPrivate(keyBase64);
+
+            FcmService.init();
 
             System.out.println("[SERVER] Server starting...");
             Thread.startVirtualThread(()->TcpServer.start(serverKey));

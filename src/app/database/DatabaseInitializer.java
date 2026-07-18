@@ -37,7 +37,8 @@ public class DatabaseInitializer {
                     confirmation_token TEXT,
                     identity_key TEXT,
                     signed_pre_key TEXT,
-                    signature TEXT
+                    signature TEXT,
+                    fcm_token TEXT
                 );
             """);
 

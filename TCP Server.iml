@@ -127,7 +127,7 @@
     <orderEntry type="module-library" exported="">
       <library>
         <CLASSES>
-          <root url="jar://$MODULE_DIR$/lib/chat-lib.jar!/" />
+          <root url="jar://$MODULE_DIR$/lib/tcpsecure-1.1.1-thin.jar!/" />
         </CLASSES>
         <JAVADOC />
         <SOURCES />
@@ -136,7 +136,7 @@
     <orderEntry type="module-library" exported="">
       <library>
         <CLASSES>
-          <root url="jar://$MODULE_DIR$/lib/tcpsecure-1.1.1-thin.jar!/" />
+          <root url="jar://$MODULE_DIR$/lib/chat-lib.jar!/" />
         </CLASSES>
         <JAVADOC />
         <SOURCES />

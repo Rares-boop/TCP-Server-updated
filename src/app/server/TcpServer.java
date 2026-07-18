@@ -1,5 +1,6 @@
 package app.server;
 
+import app.utils.FcmService;
 import chat.models.GroupChat;
 import chat.models.GroupMember;
 import chat.models.Message;
@@ -120,7 +121,8 @@ public class TcpServer {
                         case CALL_DENY:    handleCallDeny(packet); break;
                         case CALL_END:     handleCallEnd(packet); break;
                         case GET_CHAT_MEMBERS_REQUEST: handleGetChatMembers(packet); break;
-                        case LOGOUT: disconnect(); break;
+                        case REGISTER_FCM_TOKEN: handleRegisterFcmToken(packet); break;
+                        case LOGOUT: handleLogout(); break;
 
                         default: System.out.println("Unknown packet: " + packet.getType());
                     }
@@ -226,21 +228,33 @@ public class TcpServer {
 
         private void broadcastToPartner(int chatId, PacketType type, Object payload) {
             List<GroupMember> members = GroupChatRepository.selectGroupMembersByChatId(chatId);
-
             for (GroupMember m : members) {
                 int targetId = m.getUserId();
                 if (targetId == currentUser.getId()) continue;
 
                 NetworkPacket p = new NetworkPacket(type, currentUser.getId(), payload);
+                boolean isOnline = false;
 
                 synchronized (clients) {
                     for (ClientHandler client : clients) {
                         if (client.currentUser != null && client.currentUser.getId() == targetId) {
                             try {
                                 client.sendDirectPacket(p);
-                            } catch (IOException e) {logger.log(Level.WARNING, "Failed to broadcast packet to user: " + targetId, e);}
+                                isOnline = true;
+                            } catch (IOException e) {
+                                logger.log(Level.WARNING, "Failed to send to user: " + targetId, e);
+                                client.disconnect();
+                            }
                             break;
                         }
+                    }
+                }
+
+                if (!isOnline) {
+                    String fcmToken = UserRepository.getFcmToken(targetId);
+                    if (fcmToken != null) {
+                        String senderName = currentUser.getUsername();
+                        FcmService.sendPush(fcmToken, senderName, chatId, "NEW_MESSAGE");
                     }
                 }
             }
@@ -403,8 +417,32 @@ public class TcpServer {
 
             if (!isOnline) {
                 PacketType type = p.getType();
-                if (type == PacketType.CALL_REQUEST ||
-                        type == PacketType.CALL_ACCEPT ||
+
+                if(type == PacketType.CALL_REQUEST){
+                    System.out.println("[CALL] User " + targetUserId + " is offline. Sending FCM call push...");
+                    String fcmToken = UserRepository.getFcmToken(targetUserId);
+
+                    if(fcmToken != null){
+                        ChatDtos.CallRequestDto callDto = gson.fromJson(p.getPayload(), ChatDtos.CallRequestDto.class);
+                        String callerName = (this.currentUser != null) ? this.currentUser.getUsername() : "Unknown";
+
+                        int chatId = callDto.chatId;
+                        boolean isAudio = callDto.isAudio;
+
+                        if(this.currentUser == null){
+                            return;
+                        }
+
+                        FcmService.sendCallPush(fcmToken, this.currentUser.getId(), callerName, chatId, isAudio);
+                    }
+                    else{
+                        System.out.println("[CALL] No FCM token for User " + targetUserId + ". Call dropped.");
+                    }
+
+                    return;
+                }
+
+                if (type == PacketType.CALL_ACCEPT ||
                         type == PacketType.CALL_DENY ||
                         type == PacketType.CALL_END) {
 
@@ -416,6 +454,20 @@ public class TcpServer {
                 String packetJson = p.toJson();
 
                 OfflineQueueRepository.insertPendingPacket(targetUserId, packetJson);
+
+                String fcmToken = UserRepository.getFcmToken(targetUserId);
+                if (fcmToken != null) {
+                    String senderName = (currentUser != null) ? currentUser.getUsername() : "Unknown";
+                    int chatId = -1;
+                    if (type == PacketType.RECEIVE_MESSAGE) {
+                        try {
+                            Message msg = gson.fromJson(p.getPayload(), Message.class);
+                            chatId = msg.getGroupId();
+                        } catch (Exception ignored) {}
+                    }
+                    FcmService.sendPush(fcmToken, senderName, chatId, "NEW_MESSAGE");
+                }
+
             }
         }
 
@@ -546,6 +598,25 @@ public class TcpServer {
             }
 
             sendPacket(PacketType.GET_CHAT_MEMBERS_RESPONSE, memberIds);
+        }
+
+        private void handleRegisterFcmToken(NetworkPacket packet){
+            if(this.currentUser == null){
+                return;
+            }
+            String fcmToken = gson.fromJson(packet.getPayload(), String.class);
+            if (fcmToken != null && !fcmToken.isEmpty()) {
+                UserRepository.updateFcmToken(currentUser.getId(), fcmToken);
+                System.out.println("[FCM] Token registered for User " + currentUser.getId());
+            }
+        }
+
+        private void handleLogout() {
+            if (currentUser != null) {
+                UserRepository.clearFcmToken(currentUser.getId());
+                System.out.println("[FCM] Token cleared for User " + currentUser.getId() + " (logout)");
+            }
+            disconnect();
         }
 
         private void disconnect() {
