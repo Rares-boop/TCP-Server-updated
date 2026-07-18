@@ -74,6 +74,7 @@ public class TcpServer {
             this.socket = socket;
             try{
                 socket.setTcpNoDelay(true);
+                socket.setSoTimeout(60000);
 
                 this.out = new PrintWriter(socket.getOutputStream(), true);
                 this.in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
@@ -122,6 +123,7 @@ public class TcpServer {
                         case CALL_END:     handleCallEnd(packet); break;
                         case GET_CHAT_MEMBERS_REQUEST: handleGetChatMembers(packet); break;
                         case REGISTER_FCM_TOKEN: handleRegisterFcmToken(packet); break;
+                        case PING: sendPacket(PacketType.PONG, "OK"); break;
                         case LOGOUT: handleLogout(); break;
 
                         default: System.out.println("Unknown packet: " + packet.getType());
@@ -129,11 +131,13 @@ public class TcpServer {
                 }
             } catch (EOFException e) {
                 // Client disconnected — normal
+            } catch (SocketTimeoutException e) {
+                System.out.println("[SERVER] Client timed out (no ping 60s). Disconnecting.");
             }
             catch (Exception e) {
                 logger.log(Level.SEVERE, "Client thread crashed", e);
-                disconnect();
             }
+            disconnect();
         }
 
         private void handleLogin(NetworkPacket packet) throws IOException {
