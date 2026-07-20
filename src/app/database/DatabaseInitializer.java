@@ -38,7 +38,8 @@ public class DatabaseInitializer {
                     identity_key TEXT,
                     signed_pre_key TEXT,
                     signature TEXT,
-                    fcm_token TEXT
+                    fcm_token TEXT,
+                    profile_picture TEXT
                 );
             """);
 

@@ -124,6 +124,9 @@ public class TcpServer {
                         case GET_CHAT_MEMBERS_REQUEST: handleGetChatMembers(packet); break;
                         case REGISTER_FCM_TOKEN: handleRegisterFcmToken(packet); break;
                         case PING: sendPacket(PacketType.PONG, "OK"); break;
+                        case UPDATE_PROFILE_PICTURE_REQUEST: handleUpdateProfilePicture(packet); break;
+                        case GET_PROFILE_PICTURE_REQUEST:    handleGetProfilePicture(packet); break;
+                        case DELETE_ACCOUNT_REQUEST:         handleDeleteAccount(packet); break;
                         case LOGOUT: handleLogout(); break;
 
                         default: System.out.println("Unknown packet: " + packet.getType());
@@ -613,6 +616,37 @@ public class TcpServer {
                 UserRepository.updateFcmToken(currentUser.getId(), fcmToken);
                 System.out.println("[FCM] Token registered for User " + currentUser.getId());
             }
+        }
+
+        private void handleUpdateProfilePicture(NetworkPacket packet) throws IOException {
+            if (currentUser == null) return;
+            String base64Image = gson.fromJson(packet.getPayload(), String.class);
+            if (base64Image != null && !base64Image.isEmpty()) {
+                boolean success = UserRepository.updateProfilePicture(currentUser.getId(), base64Image);
+                sendPacket(PacketType.UPDATE_PROFILE_PICTURE_RESPONSE, success ? "OK" : "FAIL");
+                System.out.println("[PROFILE] Picture updated for User " + currentUser.getId());
+            } else {
+                sendPacket(PacketType.UPDATE_PROFILE_PICTURE_RESPONSE, "FAIL");
+            }
+        }
+
+        private void handleGetProfilePicture(NetworkPacket packet) throws IOException {
+            if (currentUser == null) return;
+            int targetUserId = gson.fromJson(packet.getPayload(), Integer.class);
+            String base64 = UserRepository.getProfilePicture(targetUserId);
+            sendPacket(PacketType.GET_PROFILE_PICTURE_RESPONSE, base64 != null ? base64 : "");
+        }
+
+        private void handleDeleteAccount(NetworkPacket packet) throws IOException {
+            if (currentUser == null) return;
+            int requestedUserId = gson.fromJson(packet.getPayload(), Integer.class);
+            if (requestedUserId != currentUser.getId()) {
+                sendPacket(PacketType.DELETE_ACCOUNT_RESPONSE, "DENIED");
+                return;
+            }
+            boolean success = UserRepository.deleteUserAccount(currentUser.getId());
+            sendPacket(PacketType.DELETE_ACCOUNT_RESPONSE, success ? "OK" : "FAIL");
+            if (success) disconnect();
         }
 
         private void handleLogout() {

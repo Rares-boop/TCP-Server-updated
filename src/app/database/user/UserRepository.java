@@ -181,6 +181,109 @@ public class UserRepository {
         }
     }
 
+    public static boolean updateProfilePicture(int userId, String base64Image){
+        String query = "UPDATE USERS SET profile_picture=? WHERE id=?";
+        try(var connection = DatabaseConnection.getConnection();
+        PreparedStatement ps = connection.prepareStatement(query)){
+
+            ps.setString(1, base64Image);
+            ps.setInt(2, userId);
+
+            return ps.executeUpdate() > 0;
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Error updating profile picture for user " + userId, e);
+            return false;
+        }
+
+    }
+
+    public static String getProfilePicture(int userId){
+        String query = "SELECT profile_picture FROM USERS WHERE id=?";
+        try(var connection = DatabaseConnection.getConnection();
+        PreparedStatement ps = connection.prepareStatement(query)){
+
+            ps.setInt(1, userId);
+            try(ResultSet rs = ps.executeQuery()){
+                if(rs.next()){
+                    return rs.getString("profile_picture");
+                }
+            }
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Error fetching profile picture for user " + userId, e);
+        }
+
+        return null;
+    }
+
+    public static boolean deleteUserAccount(int userId){
+        try(var connection = DatabaseConnection.getConnection()){
+            connection.setAutoCommit(false);
+
+            try{
+
+                String offlineQueueQuery = "DELETE FROM OFFLINE_QUEUE WHERE id_user=?";
+                try(var ps = connection.prepareStatement(offlineQueueQuery)){
+                    ps.setInt(1, userId);
+                    ps.executeUpdate();
+                }
+
+                String userLogsQuery = "DELETE FROM USER_LOGS WHERE id_user=?";
+                try(var ps = connection.prepareStatement(userLogsQuery)){
+                    ps.setInt(1, userId);
+                    ps.executeUpdate();
+                }
+
+                List<Integer> userChatIds = new ArrayList<>();
+                try (var ps = connection.prepareStatement("SELECT id_group FROM GROUP_MEMBERS WHERE id_user = ?")) {
+                    ps.setInt(1, userId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            userChatIds.add(rs.getInt("id_group"));
+                        }
+                    }
+                }
+
+                for (int chatId : userChatIds) {
+                    try (var ps = connection.prepareStatement("DELETE FROM MESSAGES WHERE id_group = ?")) {
+                        ps.setInt(1, chatId);
+                        ps.executeUpdate();
+                    }
+                    try (var ps = connection.prepareStatement("DELETE FROM GROUP_MEMBERS WHERE id_group = ?")) {
+                        ps.setInt(1, chatId);
+                        ps.executeUpdate();
+                    }
+                    try (var ps = connection.prepareStatement("DELETE FROM GROUP_CHATS WHERE id = ?")) {
+                        ps.setInt(1, chatId);
+                        ps.executeUpdate();
+                    }
+                }
+
+                String usersQuery = "DELETE FROM USERS WHERE id=?";
+                try(var ps = connection.prepareStatement(usersQuery)){
+                    ps.setInt(1, userId);
+                    ps.executeUpdate();
+                }
+
+                connection.commit();
+                logger.info("[DATABASE] User " + userId + " account deleted completely.");
+                return true;
+
+            } catch (SQLException e) {
+                connection.rollback();
+                logger.log(Level.SEVERE, "[DATABASE] Error deleting user " + userId + ". Rolled back.", e);
+                return false;
+            }finally {
+                connection.setAutoCommit(true);
+            }
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Connection error during delete for user " + userId, e);
+            return false;
+        }
+    }
+
     private static User mapUser(ResultSet rs) throws SQLException {
         return new User(
                 rs.getInt("id"),
