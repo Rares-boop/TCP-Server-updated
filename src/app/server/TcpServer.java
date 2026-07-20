@@ -9,6 +9,7 @@ import chat.network.ChatDtos;
 import chat.network.NetworkPacket;
 import chat.network.PacketType;
 import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import io.github.cdimascio.dotenv.Dotenv;
 import app.database.chat.GroupChatRepository;
 import app.database.chat.MessageRepository;
@@ -20,10 +21,13 @@ import app.utils.PasswordUtils;
 import tcpsecure.protocol.SecureServerSocket;
 
 import java.io.*;
+import java.lang.reflect.Type;
 import java.net.*;
 import java.security.PrivateKey;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -127,6 +131,7 @@ public class TcpServer {
                         case UPDATE_PROFILE_PICTURE_REQUEST: handleUpdateProfilePicture(packet); break;
                         case GET_PROFILE_PICTURE_REQUEST:    handleGetProfilePicture(packet); break;
                         case DELETE_ACCOUNT_REQUEST:         handleDeleteAccount(packet); break;
+                        case GET_PARTNERS_PICTURES_REQUEST: handleGetPartnersPictures(packet); break;
                         case LOGOUT: handleLogout(); break;
 
                         default: System.out.println("Unknown packet: " + packet.getType());
@@ -647,6 +652,43 @@ public class TcpServer {
             boolean success = UserRepository.deleteUserAccount(currentUser.getId());
             sendPacket(PacketType.DELETE_ACCOUNT_RESPONSE, success ? "OK" : "FAIL");
             if (success) disconnect();
+        }
+
+        private void handleGetPartnersPictures(NetworkPacket packet) throws IOException {
+            if (currentUser == null) return;
+
+            Type listType = new TypeToken<List<Integer>>(){}.getType();
+            List<Integer> chatIds = gson.fromJson(packet.getPayload(), listType);
+
+            if (chatIds == null || chatIds.isEmpty()) {
+                sendPacket(PacketType.GET_PARTNERS_PICTURES_RESPONSE, new HashMap<>());
+                return;
+            }
+
+            Map<Integer, String> result = new HashMap<>();
+
+            for (int chatId : chatIds) {
+                List<chat.models.GroupMember> members =
+                        GroupChatRepository.selectGroupMembersByChatId(chatId);
+
+                int partnerId = -1;
+                for (GroupMember m : members) {
+                    if (m.getUserId() != currentUser.getId()) {
+                        partnerId = m.getUserId();
+                        break;
+                    }
+                }
+
+                if (partnerId > 0) {
+                    String base64 = UserRepository.getProfilePicture(partnerId);
+                    result.put(chatId, base64 != null ? base64 : "");
+                } else {
+                    result.put(chatId, "");
+                }
+            }
+
+            sendPacket(PacketType.GET_PARTNERS_PICTURES_RESPONSE, result);
+            System.out.println("[PROFILE] Sent " + result.size() + " partner pictures to User " + currentUser.getId());
         }
 
         private void handleLogout() {
