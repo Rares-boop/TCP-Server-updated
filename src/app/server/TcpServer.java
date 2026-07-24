@@ -302,6 +302,11 @@ public class TcpServer {
                     return;
                 }
 
+                if (UserRepository.selectUserByUsername(dto.username) != null) {
+                    sendPacket(PacketType.REGISTER_RESPONSE, "USERNAME_TAKEN");
+                    return;
+                }
+
                 String hash = PasswordUtils.hashPassword(dto.password);
                 String token = UserRepository.insertUser(dto.username, dto.email, hash, System.currentTimeMillis());
 

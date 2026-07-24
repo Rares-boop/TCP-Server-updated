@@ -313,6 +313,20 @@ public class UserRepository {
         }
     }
 
+    public static User selectUserByUsername(String username) {
+        String query = "SELECT id, username, email, password_hash, created_at, confirmed, identity_key, signed_pre_key, signature FROM USERS WHERE username = ?";
+        try (var conn = DatabaseConnection.getConnection();
+             var ps = conn.prepareStatement(query)) {
+            ps.setString(1, username);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return mapUser(rs);
+            }
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Error selecting user by username: " + username, e);
+        }
+        return null;
+    }
+
     private static User mapUser(ResultSet rs) throws SQLException {
         return new User(
                 rs.getInt("id"),

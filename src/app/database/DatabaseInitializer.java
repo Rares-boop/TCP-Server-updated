@@ -30,7 +30,7 @@ public class DatabaseInitializer {
             stmt.executeUpdate("""
                 CREATE TABLE IF NOT EXISTS USERS(
                     id SERIAL PRIMARY KEY,
-                    username VARCHAR(100) NOT NULL,
+                    username VARCHAR(100) UNIQUE NOT NULL,
                     email VARCHAR(100) UNIQUE NOT NULL,
                     password_hash VARCHAR(255) NOT NULL,
                     created_at BIGINT,
