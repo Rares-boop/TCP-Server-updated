@@ -108,7 +108,7 @@ public class TcpServer {
                         case SEND_MESSAGE: handleSendMessage(packet); break;
 
                         case GET_CHATS_REQUEST: handleGetChats(); break;
-                        case GET_USERS_REQUEST: handleGetUsersForAdd(); break;
+                        case GET_USERS_REQUEST: handleGetUsersForAdd(packet); break;
                         case CREATE_CHAT_REQUEST: handleCreateChat(packet); break;
                         case DELETE_CHAT_REQUEST: handleDeleteChat(packet); break;
                         case RENAME_CHAT_REQUEST: handleRenameChat(packet); break;
@@ -322,12 +322,17 @@ public class TcpServer {
             }
         }
 
-        private void handleGetUsersForAdd() throws IOException {
-            List<String> rawUsers = UserRepository.selectUsersAddConversation();
+        private void handleGetUsersForAdd(NetworkPacket packet) throws IOException {
+            String search = null;
+            try {
+                search = gson.fromJson(packet.getPayload(), String.class);
+            } catch (Exception ignored) {}
+
+            List<String> rawUsers = UserRepository.selectUsersAddConversation(search, 50);
             List<String> filtered = new ArrayList<>();
             for (String u : rawUsers) {
                 int uid = Integer.parseInt(u.split(",")[0]);
-                if (uid != currentUser.getId() && uid != -1) filtered.add(u);
+                if (uid != currentUser.getId()) filtered.add(u);
             }
             sendPacket(PacketType.GET_USERS_RESPONSE, filtered);
         }
@@ -400,6 +405,13 @@ public class TcpServer {
             List<GroupMember> members = GroupChatRepository.selectGroupMembersByChatId(chatId);
 
             if(GroupChatRepository.deleteGroupChatTransactional(chatId)) {
+
+                for (GroupMember m : members) {
+                    if (m.getUserId() != currentUser.getId()) {
+                        ChatInviteRepository.deleteInviteBetween(currentUser.getId(), m.getUserId());
+                    }
+                }
+
                 NetworkPacket broadcastPacket = new NetworkPacket(PacketType.DELETE_CHAT_BROADCAST, currentUser.getId(), chatId);
                 sendDirectPacket(broadcastPacket);
 

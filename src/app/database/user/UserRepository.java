@@ -61,19 +61,33 @@ public class UserRepository {
         return null;
     }
 
-    public static List<String> selectUsersAddConversation() {
+    public static List<String> selectUsersAddConversation(String search, int limit) {
         List<String> users = new ArrayList<>();
-        try (var connection = DatabaseConnection.getConnection();
-             var stmt = connection.createStatement()) {
+        String query;
 
-            try(ResultSet rs = stmt.executeQuery("SELECT id, username FROM USERS")) {
+        if (search != null && !search.isEmpty()) {
+            query = "SELECT id, username FROM USERS WHERE confirmed = TRUE AND username ILIKE ? LIMIT ?";
+        } else {
+            query = "SELECT id, username FROM USERS WHERE confirmed = TRUE LIMIT ?";
+        }
+
+        try (var conn = DatabaseConnection.getConnection();
+             var ps = conn.prepareStatement(query)) {
+
+            if (search != null && !search.isEmpty()) {
+                ps.setString(1, "%" + search + "%");
+                ps.setInt(2, limit);
+            } else {
+                ps.setInt(1, limit);
+            }
+
+            try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     users.add(rs.getInt("id") + "," + rs.getString("username"));
                 }
             }
-
         } catch (SQLException e) {
-            logger.log(Level.SEVERE, "[DATABASE] Error fetching users for conversation", e);
+            logger.log(Level.SEVERE, "[DATABASE] Error fetching users", e);
         }
         return users;
     }

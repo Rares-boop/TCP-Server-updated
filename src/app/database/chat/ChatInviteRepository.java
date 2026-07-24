@@ -179,6 +179,21 @@ public class ChatInviteRepository {
         }
     }
 
+    public static void deleteInviteBetween(int userId1, int userId2) {
+        String query = "DELETE FROM CHAT_INVITES WHERE " +
+                "(id_sender = ? AND id_receiver = ?) OR (id_sender = ? AND id_receiver = ?)";
+        try (var conn = DatabaseConnection.getConnection();
+             var ps = conn.prepareStatement(query)) {
+            ps.setInt(1, userId1);
+            ps.setInt(2, userId2);
+            ps.setInt(3, userId2);
+            ps.setInt(4, userId1);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[INVITE] Error deleting invite between users", e);
+        }
+    }
+
     private ChatInviteRepository() {
         throw new UnsupportedOperationException("Utility class");
     }
