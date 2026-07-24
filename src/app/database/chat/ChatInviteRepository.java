@@ -167,6 +167,18 @@ public class ChatInviteRepository {
 
     }
 
+    public static void deleteExpiredPending(int days) {
+        String query = "DELETE FROM CHAT_INVITES WHERE status = 'PENDING' AND created_at < ?";
+        try (var conn = DatabaseConnection.getConnection();
+             var ps = conn.prepareStatement(query)) {
+            ps.setLong(1, System.currentTimeMillis() - (days * 86_400_000L));
+            int deleted = ps.executeUpdate();
+            if (deleted > 0) logger.info("[INVITE] Cleaned " + deleted + " expired pending invites");
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[INVITE] Error cleaning expired invites", e);
+        }
+    }
+
     private ChatInviteRepository() {
         throw new UnsupportedOperationException("Utility class");
     }

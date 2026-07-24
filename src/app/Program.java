@@ -1,6 +1,8 @@
 package app;
 
+import app.database.chat.ChatInviteRepository;
 import app.database.user.UserLogRepository;
+import app.database.user.UserRepository;
 import app.server.TcpServer;
 import app.server.UdpServer;
 import app.utils.FcmService;
@@ -40,9 +42,21 @@ public class Program {
             Thread.startVirtualThread(() -> UdpServer.start(UDP_AUDIO_PORT, UdpServer.activeCallers));
             Thread.startVirtualThread(() -> UdpServer.start(UDP_VIDEO_PORT, UdpServer.activeVideo));
 
-            Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(
-                    () -> UserLogRepository.deleteOlderThan(30),
+            ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+
+            scheduler.scheduleAtFixedRate(
+                    () -> UserLogRepository.deleteOlderThan(7),
                     1, 24, TimeUnit.HOURS
+            );
+
+            scheduler.scheduleAtFixedRate(
+                    () -> ChatInviteRepository.deleteExpiredPending(7),
+                    1, 24, TimeUnit.HOURS
+            );
+
+            scheduler.scheduleAtFixedRate(
+                    () -> UserRepository.deleteUnconfirmedOlderThan(1),
+                    1, 12, TimeUnit.HOURS
             );
 
             Thread.currentThread().join();

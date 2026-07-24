@@ -287,6 +287,18 @@ public class UserRepository {
         }
     }
 
+    public static void deleteUnconfirmedOlderThan(int days) {
+        String query = "DELETE FROM USERS WHERE confirmed = FALSE AND created_at < ?";
+        try (var conn = DatabaseConnection.getConnection();
+             var ps = conn.prepareStatement(query)) {
+            ps.setLong(1, System.currentTimeMillis() - (days * 86_400_000L));
+            int deleted = ps.executeUpdate();
+            if (deleted > 0) logger.info("[DATABASE] Cleaned " + deleted + " unconfirmed accounts");
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Error cleaning unconfirmed accounts", e);
+        }
+    }
+
     private static User mapUser(ResultSet rs) throws SQLException {
         return new User(
                 rs.getInt("id"),
