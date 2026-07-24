@@ -1,5 +1,6 @@
 package app.server;
 
+import app.database.chat.ChatInviteRepository;
 import app.utils.FcmService;
 import chat.models.GroupChat;
 import chat.models.GroupMember;
@@ -132,6 +133,10 @@ public class TcpServer {
                         case GET_PROFILE_PICTURE_REQUEST:    handleGetProfilePicture(packet); break;
                         case DELETE_ACCOUNT_REQUEST:         handleDeleteAccount(packet); break;
                         case GET_PARTNERS_PICTURES_REQUEST: handleGetPartnersPictures(packet); break;
+                        case CHAT_INVITE_SEND:              handleChatInviteSend(packet); break;
+                        case CHAT_INVITE_ACCEPT:            handleChatInviteAccept(packet); break;
+                        case CHAT_INVITE_DENY:              handleChatInviteDeny(packet); break;
+                        case GET_PENDING_INVITES_REQUEST:   handleGetPendingInvites(packet); break;
                         case LOGOUT: handleLogout(); break;
 
                         default: System.out.println("Unknown packet: " + packet.getType());
@@ -689,6 +694,112 @@ public class TcpServer {
 
             sendPacket(PacketType.GET_PARTNERS_PICTURES_RESPONSE, result);
             System.out.println("[PROFILE] Sent " + result.size() + " partner pictures to User " + currentUser.getId());
+        }
+
+        private void handleChatInviteSend(NetworkPacket packet) throws IOException {
+            if (currentUser == null) return;
+            int targetUserId = gson.fromJson(packet.getPayload(), Integer.class);
+
+            if (targetUserId == currentUser.getId()) {
+                sendPacket(PacketType.CHAT_INVITE_RESULT, "INVALID");
+                return;
+            }
+
+            GroupChat existing = GroupChatRepository.selectChatBetweenUsers(currentUser.getId(), targetUserId);
+            if (existing != null) {
+                sendPacket(PacketType.CHAT_INVITE_RESULT, "ALREADY_CHATTING");
+                return;
+            }
+
+            if (ChatInviteRepository.hasExistingInviteOrChat(currentUser.getId(), targetUserId)) {
+                sendPacket(PacketType.CHAT_INVITE_RESULT, "ALREADY_INVITED");
+                return;
+            }
+
+            int inviteId = ChatInviteRepository.insertInvite(currentUser.getId(), targetUserId);
+
+            if (inviteId > 0) {
+                sendPacket(PacketType.CHAT_INVITE_RESULT, "SENT");
+                System.out.println("[INVITE] User " + currentUser.getId() + " invited User " + targetUserId);
+
+                java.util.Map<String, Object> notifData = new java.util.HashMap<>();
+                notifData.put("inviteId", inviteId);
+                notifData.put("senderId", currentUser.getId());
+                notifData.put("senderName", currentUser.getUsername());
+                notifData.put("createdAt", System.currentTimeMillis());
+
+                NetworkPacket notifPacket = new NetworkPacket(PacketType.CHAT_INVITE_RECEIVED, currentUser.getId(), notifData);
+                sendToSpecificUser(targetUserId, notifPacket);
+            } else if (inviteId == -2) {
+                sendPacket(PacketType.CHAT_INVITE_RESULT, "ALREADY_INVITED");
+            } else {
+                sendPacket(PacketType.CHAT_INVITE_RESULT, "FAIL");
+            }
+        }
+
+        private void handleChatInviteAccept(NetworkPacket packet) throws IOException {
+            if (currentUser == null) return;
+            int inviteId = gson.fromJson(packet.getPayload(), Integer.class);
+
+            int senderId = ChatInviteRepository.getInviteSenderId(inviteId, currentUser.getId());
+            if (senderId < 0) {
+                sendPacket(PacketType.CHAT_INVITE_RESULT, "INVALID");
+                return;
+            }
+
+            boolean accepted = ChatInviteRepository.acceptInvite(inviteId, currentUser.getId());
+            if (!accepted) {
+                sendPacket(PacketType.CHAT_INVITE_RESULT, "FAIL");
+                return;
+            }
+
+            System.out.println("[INVITE] User " + currentUser.getId() + " accepted invite #" + inviteId);
+
+            java.util.Map<String, Object> responseData = new java.util.HashMap<>();
+            responseData.put("status", "ACCEPTED");
+            responseData.put("senderId", senderId);
+            responseData.put("inviteId", inviteId);
+            sendPacket(PacketType.CHAT_INVITE_RESULT, responseData);
+
+            java.util.Map<String, Object> notifData = new java.util.HashMap<>();
+            notifData.put("status", "ACCEPTED");
+            notifData.put("inviteId", inviteId);
+            notifData.put("acceptedBy", currentUser.getId());
+            notifData.put("acceptedByName", currentUser.getUsername());
+
+            NetworkPacket notifPacket = new NetworkPacket(PacketType.CHAT_INVITE_RESULT, currentUser.getId(), notifData);
+            sendToSpecificUser(senderId, notifPacket);
+        }
+
+        private void handleChatInviteDeny(NetworkPacket packet) throws IOException {
+            if (currentUser == null) return;
+            int inviteId = gson.fromJson(packet.getPayload(), Integer.class);
+
+            int senderId = ChatInviteRepository.getInviteSenderId(inviteId, currentUser.getId());
+            if (senderId < 0) {
+                sendPacket(PacketType.CHAT_INVITE_RESULT, "INVALID");
+                return;
+            }
+
+            ChatInviteRepository.denyInvite(inviteId, currentUser.getId());
+            System.out.println("[INVITE] User " + currentUser.getId() + " denied invite #" + inviteId);
+
+            sendPacket(PacketType.CHAT_INVITE_RESULT, "DENIED");
+
+            java.util.Map<String, Object> notifData = new java.util.HashMap<>();
+            notifData.put("status", "DENIED");
+            notifData.put("inviteId", inviteId);
+            notifData.put("deniedBy", currentUser.getId());
+
+            NetworkPacket notifPacket = new NetworkPacket(PacketType.CHAT_INVITE_RESULT, currentUser.getId(), notifData);
+            sendToSpecificUser(senderId, notifPacket);
+        }
+
+        private void handleGetPendingInvites(NetworkPacket ignoredPacket) throws IOException {
+            if (currentUser == null) return;
+            java.util.List<java.util.Map<String, Object>> invites =
+                    ChatInviteRepository.getPendingInvitesForUser(currentUser.getId());
+            sendPacket(PacketType.GET_PENDING_INVITES_RESPONSE, invites);
         }
 
         private void handleLogout() {

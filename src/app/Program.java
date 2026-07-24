@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.security.PrivateKey;
 import java.util.Base64;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -30,7 +31,7 @@ public class Program {
             byte[] keyBytes = SecureKeyStorage.loadDecrypted(keyPath, keyPass);
             String keyBase64 = Base64.getEncoder().encodeToString(keyBytes);
             PrivateKey serverKey = CryptoHelper.stringToDilithiumPrivate(keyBase64);
-
+            
             FcmService.init();
 
             System.out.println("[SERVER] Server starting...");

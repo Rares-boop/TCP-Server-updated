@@ -1,5 +1,6 @@
 package app.database.user;
 
+import app.database.chat.ChatInviteRepository;
 import chat.models.User;
 import chat.network.ChatDtos;
 import app.database.DatabaseConnection;
@@ -234,6 +235,8 @@ public class UserRepository {
                     ps.setInt(1, userId);
                     ps.executeUpdate();
                 }
+
+                ChatInviteRepository.deleteAllForUser(userId);
 
                 List<Integer> userChatIds = new ArrayList<>();
                 try (var ps = connection.prepareStatement("SELECT id_group FROM GROUP_MEMBERS WHERE id_user = ?")) {

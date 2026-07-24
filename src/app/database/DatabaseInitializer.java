@@ -19,6 +19,7 @@ public class DatabaseInitializer {
         createTableUserLogs();
         createTableMessages();
         createTableOfflineQueue();
+        createTableChatInvites();
         createIndexes();
     }
 
@@ -143,6 +144,28 @@ public class DatabaseInitializer {
         }
     }
 
+    private static void createTableChatInvites(){
+        try(var connection = DatabaseConnection.getConnection();
+        var stmt = connection.createStatement()){
+
+            stmt.executeUpdate("""
+                    CREATE TABLE IF NOT EXISTS CHAT_INVITES (
+                                id SERIAL PRIMARY KEY,
+                                id_sender INTEGER NOT NULL,
+                                id_receiver INTEGER NOT NULL,
+                                status VARCHAR(20) DEFAULT 'PENDING',
+                                created_at BIGINT,
+                                UNIQUE(id_sender, id_receiver),
+                                FOREIGN KEY(id_sender) REFERENCES USERS(id) ON DELETE CASCADE,
+                                FOREIGN KEY(id_receiver) REFERENCES USERS(id) ON DELETE CASCADE
+                            );
+            """);
+
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Failed to create CHAT_INVITES table", e);
+        }
+    }
+
     private static void createIndexes() {
         String[] indexes = {
                 "CREATE INDEX IF NOT EXISTS idx_users_email ON USERS(email)",
@@ -152,6 +175,7 @@ public class DatabaseInitializer {
                 "CREATE INDEX IF NOT EXISTS idx_group_members_group ON GROUP_MEMBERS(id_group)",
                 "CREATE INDEX IF NOT EXISTS idx_offline_queue_user ON OFFLINE_QUEUE(id_user)",
                 "CREATE INDEX IF NOT EXISTS idx_user_logs_ip ON USER_LOGS(ip_address, action_type)",
+                "CREATE INDEX IF NOT EXISTS idx_invites_receiver ON CHAT_INVITES(receiver_id, status)",
         };
 
         try (var conn = DatabaseConnection.getConnection();
