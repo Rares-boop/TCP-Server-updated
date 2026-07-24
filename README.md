@@ -1,89 +1,87 @@
 # TCP-Server
 
-Post-quantum encrypted messaging server with end-to-end encryption, voice/video calls, and offline message delivery.
+Post-quantum encrypted messaging server with end-to-end encryption, voice/video call relay, and push notifications.
 
 ## Features
 
-- **Post-Quantum Handshake** — Hybrid ML-KEM-768 (Kyber) + X25519 ECDH with ephemeral keys (PFS)
-- **End-to-End Encryption** — AES-256-GCM transport encryption, Dilithium signatures for identity verification
-- **Email Confirmation** — 6-digit code via SMTP (Gmail)
-- **Password Security** — bcrypt (cost 12) with HMAC-SHA256 pepper
-- **Rate Limiting** — 5 failed login attempts per IP / 15 minutes
-- **IDOR Protection** — Membership and ownership checks on all operations
-- **Voice/Video Relay** — Blind UDP relay (server never sees plaintext media)
-- **Offline Queue** — Messages stored and delivered on reconnect
-- **Virtual Threads** — Java 21+ lightweight concurrency (~20K concurrent connections)
+- **Post-Quantum Handshake** — ML-KEM-768 + X25519 hybrid key exchange, ML-DSA-65 server authentication (via TCPSecure protocol)
+- **Session Resumption** — Stateless encrypted tickets (AES-256-GCM)
+- **E2E Encrypted Messaging** — Server relays encrypted content, never reads plaintext
+- **Voice & Video Calls** — UDP relay for encrypted audio (Opus) and video (H.264) streams
+- **FCM Push Notifications** — Offline message alerts and incoming call push (OAuth2 JWT, zero external dependencies)
+- **Chat Invites** — Invite system with accept/deny before key exchange
+- **User Profiles** — Profile picture upload and storage
+- **Account Management** — Email confirmation, forgot/reset password, account deletion with full cascade
+- **Security** — Bcrypt + HMAC pepper passwords, rate limiting, IP logging, IDOR protection
+- **Scheduled Cleanup** — Expired invites (7d), old logs (7d), unconfirmed accounts (1d)
 
-## Project Structure
+## Tech Stack
 
-```
-src/
-├── app/
-│   ├── Program.java              # Entry point
-│   └── server/
-│       ├── TcpServer.java        # TCP server + client handler
-│       └── UdpServer.java        # UDP blind relay (audio/video)
-├── database/
-│   ├── DatabaseConnection.java   # HikariCP pool
-│   ├── DatabaseInitializer.java  # Table creation
-│   ├── chat/
-│   │   ├── GroupChatRepository.java
-│   │   └── MessageRepository.java
-│   ├── queue/
-│   │   └── OfflineQueueRepository.java
-│   └── user/
-│       ├── UserRepository.java
-│       └── UserLogRepository.java
-└── utils/
-    ├── EmailUtils.java           # SMTP confirmation
-    └── PasswordUtils.java        # bcrypt + pepper
-```
+- Java 21 (Virtual Threads)
+- PostgreSQL + HikariCP
+- TCPSecure 1.1.1 (custom post-quantum TLS-like protocol)
+- BouncyCastle (cryptography)
+- Gson (serialization)
+- Dotenv (configuration)
 
 ## Setup
 
-### Requirements
+1. **Clone and configure:**
+   ```bash
+   git clone https://github.com/Rares-boop/TCP-Server-updated.git
+   cd TCP-Server-updated
+   cp .env.example .env
+   ```
 
-- Java 23+
-- PostgreSQL
+2. **Edit `.env`:**
+   ```env
+   DB_URL=jdbc:postgresql://localhost:5432/your_db
+   DB_USER=your_user
+   DB_PASSWORD=your_password
+   TCP_PORT=15555
+   UDP_AUDIO_PORT=15556
+   UDP_VIDEO_PORT=15557
+   DILITHIUM_KEY_PATH=server_dilithium.enc
+   DILITHIUM_KEY_PASSWORD=your_key_password
+   SMTP_EMAIL=your_email@gmail.com
+   SMTP_PASSWORD=your_app_password
+   FCM_SERVICE_ACCOUNT_PATH=firebase-service-account.json
+   ```
 
-### Configuration
+3. **Database:**
+   ```bash
+   # Tables are auto-created on first run via DatabaseInitializer
+   # Or run manually:
+   java -cp "TCP_Server.jar:lib/*" app.database.DatabaseInitializer
+   ```
 
-Create a `.env` file in the project root:
+4. **Firebase (for push notifications):**
+    - Create a project at [Firebase Console](https://console.firebase.google.com/)
+    - Download service account JSON → place as `firebase-service-account.json`
 
-```env
-DB_HOST=localhost
-DB_PORT=5432
-DB_DATABASE=tcpsecure
-DB_USER=postgres
-DB_PASSWORD=your_password
-DB_POOL_SIZE=50
+5. **Run:**
+   ```bash
+   java -cp "TCP_Server.jar:lib/*" app.Program
+   ```
 
-TCP_PORT=15555
-UDP_AUDIO_PORT=15556
-UDP_VIDEO_PORT=15557
+## Database Schema
 
-PEPPER=your_secure_random_pepper
+| Table | Purpose |
+|-------|---------|
+| `USERS` | Accounts, keys, FCM tokens, profile pictures |
+| `GROUP_CHATS` | Chat rooms |
+| `GROUP_MEMBERS` | Chat membership |
+| `MESSAGES` | Encrypted message storage |
+| `OFFLINE_QUEUE` | Pending packets for offline users |
+| `USER_LOGS` | Login attempts, rate limiting |
+| `CHAT_INVITES` | Pending/accepted/denied chat invitations |
 
-SMTP_EMAIL=your_email@gmail.com
-SMTP_PASSWORD=your_app_password
+## Protocol
+
+Communication uses a custom JSON-over-TCP protocol secured by TCPSecure. Each packet:
+```json
+{"type": "PACKET_TYPE", "senderId": 1, "payload": {...}}
 ```
 
-### Database
+~45 packet types covering auth, messaging, calls, profiles, and invitations.
 
-Run `DatabaseInitializer.main()` to create all tables, or manually:
-
-```sql
--- Tables: USERS, GROUP_CHATS, GROUP_MEMBERS, MESSAGES, OFFLINE_QUEUE, USER_LOGS
-```
-
-### Run
-
-```bash
-java -cp "out/production/TCP Server:lib/*" app.Program
-```
-
-### Docker
-
-```bash
-docker compose up -d
-```

@@ -137,6 +137,8 @@ public class TcpServer {
                         case CHAT_INVITE_ACCEPT:            handleChatInviteAccept(packet); break;
                         case CHAT_INVITE_DENY:              handleChatInviteDeny(packet); break;
                         case GET_PENDING_INVITES_REQUEST:   handleGetPendingInvites(packet); break;
+                        case FORGOT_PASSWORD_REQUEST: handleForgotPassword(packet); break;
+                        case RESET_PASSWORD_REQUEST:  handleResetPassword(packet); break;
                         case LOGOUT: handleLogout(); break;
 
                         default: System.out.println("Unknown packet: " + packet.getType());
@@ -817,6 +819,30 @@ public class TcpServer {
             java.util.List<java.util.Map<String, Object>> invites =
                     ChatInviteRepository.getPendingInvitesForUser(currentUser.getId());
             sendPacket(PacketType.GET_PENDING_INVITES_RESPONSE, invites);
+        }
+
+        private void handleForgotPassword(NetworkPacket packet) throws IOException {
+            String email = gson.fromJson(packet.getPayload(), String.class);
+            User user = UserRepository.selectUserByEmail(email);
+
+            if (user == null || !user.isConfirmed()) {
+                sendPacket(PacketType.FORGOT_PASSWORD_RESPONSE, "SENT");
+                return;
+            }
+
+            String token = String.format("%06d", new java.security.SecureRandom().nextInt(1_000_000));
+            UserRepository.saveResetToken(email, token);
+            EmailUtils.sendConfirmation(email, token);
+            sendPacket(PacketType.FORGOT_PASSWORD_RESPONSE, "SENT");
+            System.out.println("[AUTH] Password reset requested for " + email);
+        }
+
+        private void handleResetPassword(NetworkPacket packet) throws IOException {
+            ChatDtos.ResetPasswordDto dto = gson.fromJson(packet.getPayload(), ChatDtos.ResetPasswordDto.class);
+            String hash = PasswordUtils.hashPassword(dto.newPassword);
+            boolean success = UserRepository.resetPassword(dto.token, hash);
+            sendPacket(PacketType.RESET_PASSWORD_RESPONSE, success ? "OK" : "INVALID");
+            if (success) System.out.println("[AUTH] Password reset successful.");
         }
 
         private void handleLogout() {

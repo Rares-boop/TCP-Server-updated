@@ -327,6 +327,32 @@ public class UserRepository {
         return null;
     }
 
+    public static boolean saveResetToken(String email, String token) {
+        String query = "UPDATE USERS SET confirmation_token = ? WHERE email = ? AND confirmed = TRUE";
+        try (var conn = DatabaseConnection.getConnection();
+             var ps = conn.prepareStatement(query)) {
+            ps.setString(1, token);
+            ps.setString(2, email);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Error saving reset token", e);
+            return false;
+        }
+    }
+
+    public static boolean resetPassword(String token, String newPasswordHash) {
+        String query = "UPDATE USERS SET password_hash = ?, confirmation_token = NULL WHERE confirmation_token = ? AND confirmed = TRUE";
+        try (var conn = DatabaseConnection.getConnection();
+             var ps = conn.prepareStatement(query)) {
+            ps.setString(1, newPasswordHash);
+            ps.setString(2, token);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "[DATABASE] Error resetting password", e);
+            return false;
+        }
+    }
+
     private static User mapUser(ResultSet rs) throws SQLException {
         return new User(
                 rs.getInt("id"),
